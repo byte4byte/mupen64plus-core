@@ -5,6 +5,7 @@
 #define HOST_CCREG 20 /* callee-save */
 #define HOST_BTREG 19 /* callee-save */
 #define EXCLUDE_REG 29 /* FP */
+#define EXCLUDE_M1_REG 18
 
 #define NATIVE_64 1
 #define HOST_IMM8 1
@@ -35,7 +36,13 @@
 #define LR 30
 #define WZR 31
 #define XZR WZR
+#ifdef APPLE_M1
+#define CALLER_SAVED_REGS 0x3ffff
+#define TRAMPOLINE_REG 13
+#else
 #define CALLER_SAVED_REGS 0x7ffff
+#define TRAMPOLINE_REG 18
+#endif
 #define HOST_TEMPREG 30
 
 // Note: FP is set to &dynarec_local when executing generated code.

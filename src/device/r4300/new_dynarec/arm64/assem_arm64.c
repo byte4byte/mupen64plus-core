@@ -263,7 +263,11 @@ static uintptr_t jump_table_symbols[] = {
 
 static void cache_flush(char* start, char* end)
 {
-#ifndef WIN32
+#if defined(APPLE_M1)
+    int mode = jit_exec();
+    sys_icache_invalidate(start, end-start);
+    jit_restore(mode);
+#elif ! defined(WIN32)
     // Don't rely on GCC's __clear_cache implementation, as it caches
     // icache/dcache cache line sizes, that can vary between cores on
     // big.LITTLE architectures.
@@ -433,7 +437,7 @@ static void alloc_reg(struct regstat *cur,int i,signed char tr)
   // registers that have not been used recently.
   if(i>0) {
     for(hr=0;hr<HOST_REGS;hr++) {
-      if(hr!=EXCLUDE_REG&&cur->regmap[hr]==-1) {
+      if(!is_exclude_reg(hr)&&cur->regmap[hr]==-1) {
         if(regs[i-1].regmap[hr]!=rs1[i-1]&&regs[i-1].regmap[hr]!=rs2[i-1]&&regs[i-1].regmap[hr]!=rt1[i-1]&&regs[i-1].regmap[hr]!=rt2[i-1]) {
           cur->regmap[hr]=tr;
           cur->dirty&=~(1<<hr);
@@ -445,7 +449,7 @@ static void alloc_reg(struct regstat *cur,int i,signed char tr)
   }
   // Try to allocate any available register
   for(hr=0;hr<HOST_REGS;hr++) {
-    if(hr!=EXCLUDE_REG&&cur->regmap[hr]==-1) {
+    if(!is_exclude_reg(hr)&&cur->regmap[hr]==-1) {
       cur->regmap[hr]=tr;
       cur->dirty&=~(1<<hr);
       cur->isconst&=~(1<<hr);
@@ -597,7 +601,7 @@ static void alloc_reg64(struct regstat *cur,int i,signed char tr)
   // registers that have not been used recently.
   if(i>0) {
     for(hr=0;hr<HOST_REGS;hr++) {
-      if(hr!=EXCLUDE_REG&&cur->regmap[hr]==-1) {
+      if(!is_exclude_reg(hr)&&cur->regmap[hr]==-1) {
         if(regs[i-1].regmap[hr]!=rs1[i-1]&&regs[i-1].regmap[hr]!=rs2[i-1]&&regs[i-1].regmap[hr]!=rt1[i-1]&&regs[i-1].regmap[hr]!=rt2[i-1]) {
           cur->regmap[hr]=tr|64;
           cur->dirty&=~(1<<hr);
@@ -609,7 +613,7 @@ static void alloc_reg64(struct regstat *cur,int i,signed char tr)
   }
   // Try to allocate any available register
   for(hr=0;hr<HOST_REGS;hr++) {
-    if(hr!=EXCLUDE_REG&&cur->regmap[hr]==-1) {
+    if(!is_exclude_reg(hr)&&cur->regmap[hr]==-1) {
       cur->regmap[hr]=tr|64;
       cur->dirty&=~(1<<hr);
       cur->isconst&=~(1<<hr);
@@ -708,12 +712,12 @@ static void alloc_reg_temp(struct regstat *cur,int i,signed char tr)
   // see if it's already allocated
   for(hr=0;hr<HOST_REGS;hr++)
   {
-    if(hr!=EXCLUDE_REG&&cur->regmap[hr]==tr) return;
+    if(!is_exclude_reg(hr)&&cur->regmap[hr]==tr) return;
   }
 
   // Try to allocate any available register
   for(hr=HOST_REGS-1;hr>=0;hr--) {
-    if(hr!=EXCLUDE_REG&&cur->regmap[hr]==-1) {
+    if(!is_exclude_reg(hr)&&cur->regmap[hr]==-1) {
       cur->regmap[hr]=tr;
       cur->dirty&=~(1<<hr);
       cur->isconst&=~(1<<hr);
@@ -827,7 +831,7 @@ static void alloc_arm64_reg(struct regstat *cur,int i,signed char tr,int hr)
   // see if it's already allocated (and dealloc it)
   for(n=0;n<HOST_REGS;n++)
   {
-    if(n!=EXCLUDE_REG&&cur->regmap[n]==tr) {
+    if(!is_exclude_reg(n)&&cur->regmap[n]==tr) {
       dirty=(cur->dirty>>n)&1;
       cur->regmap[n]=-1;
     }
@@ -3136,6 +3140,7 @@ static void do_dirty_stub_ds(struct ll_entry *head)
 {
   assem_debug("do_dirty_stub_ds %x",head->vaddr);
   intptr_t out_rx=((intptr_t)out-(intptr_t)base_addr)+(intptr_t)base_addr_rx;
+
   intptr_t offset=(((intptr_t)head&~0xfffLL)-((intptr_t)out_rx&~0xfffLL));
 
   if((uintptr_t)head<4294967296LL){
@@ -3747,8 +3752,8 @@ static void fconv_assemble_arm64(int i,struct regstat *i_regs)
   }
   if(opcode2[i]==0x14&&(source[i]&0x3f)==0x21) {
     emit_addimm64(FP,fp_fcr31,ARG1_REG);
-    emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_simple[(source[i]>>11)&0x1f],ARG1_REG);
-    emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_double[(source[i]>> 6)&0x1f],ARG2_REG);
+    emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_simple[(source[i]>>11)&0x1f],ARG2_REG);
+    emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_double[(source[i]>> 6)&0x1f],ARG3_REG);
     emit_call((intptr_t)cvt_d_w);
   }
   if(opcode2[i]==0x15&&(source[i]&0x3f)==0x20) {
@@ -3766,8 +3771,8 @@ static void fconv_assemble_arm64(int i,struct regstat *i_regs)
 
   if(opcode2[i]==0x10&&(source[i]&0x3f)==0x21) {
     emit_addimm64(FP,fp_fcr31,ARG1_REG);
-    emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_simple[(source[i]>>11)&0x1f],ARG1_REG);
-    emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_double[(source[i]>> 6)&0x1f],ARG2_REG);
+    emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_simple[(source[i]>>11)&0x1f],ARG2_REG);
+    emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_double[(source[i]>> 6)&0x1f],ARG3_REG);
     emit_call((intptr_t)cvt_d_s);
   }
   if(opcode2[i]==0x10&&(source[i]&0x3f)==0x24) {
@@ -4185,8 +4190,8 @@ static void float_assemble(int i,struct regstat *i_regs)
         break;
      case 0x05: case 0x06: case 0x07:
         emit_addimm64(FP,fp_fcr31,ARG1_REG);
-        emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_simple[(source[i]>>11)&0x1f],ARG1_REG);
-        emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_simple[(source[i]>> 6)&0x1f],ARG2_REG);
+        emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_simple[(source[i]>>11)&0x1f],ARG2_REG);
+        emit_readptr((intptr_t)&g_dev.r4300.new_dynarec_hot_state.cp1_regs_simple[(source[i]>> 6)&0x1f],ARG3_REG);
         break;
     }
     switch(source[i]&0x3f)
@@ -4514,7 +4519,7 @@ static void do_miniht_jump(int rs,int rh,int ht) {
   emit_cmp(rh,rs);
   intptr_t jaddr=(intptr_t)out;
   emit_jeq(0);
-  if(rs==18) {
+  if(rs==TRAMPOLINE_REG) {
     // x18 is used for trampoline jumps, move it to another register (x0)
     emit_mov(rs,0);
     rs=0;
@@ -4569,7 +4574,9 @@ static void do_clear_cache(void)
 
 static void invalidate_addr(u_int addr)
 {
+  int mode = jit_write();
   invalidate_block(addr>>12);
+  jit_restore(mode);
 }
 
 // CPU-architecture-specific initialization
@@ -4596,25 +4603,31 @@ static void arch_init(void) {
   jump_table_symbols[8] = (intptr_t)cached_interp_DDIV;
   jump_table_symbols[9] = (intptr_t)cached_interp_DDIVU;
 
-  // Trampolines for jumps >128MB
-  intptr_t *ptr,*ptr2,*ptr3;
-  ptr=(intptr_t *)jump_table_symbols;
-  ptr2=(intptr_t *)((char *)base_addr+(1<<TARGET_SIZE_2)-JUMP_TABLE_SIZE);
-  ptr3=(intptr_t *)((char *)base_addr_rx+(1<<TARGET_SIZE_2)-JUMP_TABLE_SIZE);
-  while((char *)ptr<(char *)jump_table_symbols+sizeof(jump_table_symbols))
+  jit_write();
   {
-    int *ptr4=(int*)ptr2;
-    intptr_t offset=*ptr-(intptr_t)ptr3;
-    if(offset>=-134217728LL&&offset<134217728LL) {
-      *ptr4=0x14000000|((offset>>2)&0x3ffffff); // direct branch
-    }else{
-      *ptr4=0x58000000|((8>>2)<<5)|18; // ldr x18,[pc,#8]
-      *(ptr4+1)=0xd61f0000|(18<<5);
+    // Trampolines for jumps >128MB
+    intptr_t *ptr,*ptr2,*ptr3;
+    ptr=(intptr_t *)jump_table_symbols;
+    ptr2=(intptr_t *)((char *)base_addr+(1<<TARGET_SIZE_2)-JUMP_TABLE_SIZE);
+    ptr3=(intptr_t *)((char *)base_addr_rx+(1<<TARGET_SIZE_2)-JUMP_TABLE_SIZE);
+    while((char *)ptr<(char *)jump_table_symbols+sizeof(jump_table_symbols))
+    {
+      int *ptr4=(int*)ptr2;
+      intptr_t offset=*ptr-(intptr_t)ptr3;
+      if(offset>=-134217728LL&&offset<134217728LL) {
+        *ptr4=0x14000000|((offset>>2)&0x3ffffff); // direct branch
+      }else{
+        *ptr4=0x58000000|((8>>2)<<5)|TRAMPOLINE_REG; // ldr x18,[pc,#8]
+        *(ptr4+1)=0xd61f0000|(TRAMPOLINE_REG<<5);
+      }
+      ptr2++;
+      *ptr2=*ptr;
+      ptr++;
+      ptr2++;
+      ptr3+=2;
     }
-    ptr2++;
-    *ptr2=*ptr;
-    ptr++;
-    ptr2++;
-    ptr3+=2;
   }
+  cache_flush(base_addr+(1<<TARGET_SIZE_2)-JUMP_TABLE_SIZE, (base_addr+(1<<TARGET_SIZE_2)-JUMP_TABLE_SIZE)+JUMP_TABLE_SIZE);
+
+  jit_exec();
 }
